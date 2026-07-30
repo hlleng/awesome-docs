@@ -8,7 +8,6 @@
 overview
 m5stack
 sipeed
-milian
 yiyue
 jingsuan
 radxa
