@@ -380,6 +380,33 @@ axera@raspberrypi:~ $
 
 CMM 用于划分系统内存与 NPU 可用内存。该项主要适用于主控开发板；算力卡通常以卡端 DDR 容量和 AXCL 运行环境为准。
 如需运行大模型或多路并发任务，优先确认 CMM 或卡端 DDR 容量是否满足模型加载和推理需要。
+
+#### 配置 OS MEM 和 CMM
+
+使用 [cmm-os-mem-config.sh](https://huggingface.co/AXERA-TECH/AX650-Community-Hub/blob/main/sdk/tools/cmm-os-mem-config.sh) 配置 OS MEM 和 CMM。将脚本下载至开发板并赋予可执行权限后，按以下方式执行：
+
+```bash
+# 查看当前 OS MEM / CMM 配置
+./cmm-os-mem-config.sh --show
+
+# 交互式修改 OS MEM 或 CMM
+./cmm-os-mem-config.sh
+
+# 直接设置 OS MEM 为 4096 MiB
+./cmm-os-mem-config.sh --os-mem 4096
+
+# 直接设置 CMM 为 4096 MiB
+./cmm-os-mem-config.sh --cmm 4096
+
+# 首次运行无法读取 U-Boot bootargs 时，初始化 fw_env.config
+./cmm-os-mem-config.sh --init-fw-env
+```
+
+- OS MEM 会写入 U-Boot `bootargs` 的 `mem=xxxM`。
+- CMM 会写入 `/soc/scripts/auto_load_all_drv.sh` 的 `cmmpool=anonymous,0,0x...,xxxM`。
+- 修改成功后需手动执行 `reboot` 才会生效。
+- 写入前会备份原配置：`/root/cmm-os-mem-config.bootargs.bak` 和 `/root/cmm-os-mem-config.auto_load_all_drv.sh.bak`。
+
 使用如下命令查询CMM内存使用情况：
 
 ```bash
@@ -721,4 +748,3 @@ PyAXEngine 是 NPU Python API，接口风格兼容 ONNXRuntime Python API，便�
 #### axcl-samples
 
 axcl-samples 实现了常见的 **深度学习开源算法** 在算力卡上运行的示例代码，方便社区开发者进行快速评估和适配。源码仓库见[axcl-samples](https://github.com/AXERA-TECH/axcl-samples)。
-
