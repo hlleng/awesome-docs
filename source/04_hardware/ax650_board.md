@@ -50,26 +50,22 @@ AX650N DEMO板集成了AX650N基本所有的功能模块，扩展板提供了sen
 ### 完整烧录 AXP 固件
 
 1. 双击 `AXDL.exe` 运行工具，单击工具栏中的 AXP 加载按钮，选择准备好的 `.axp` 固件。
-
+   
    ![AXDL 加载 AXP 固件](../_static/04_hardware/stereo_27.jpg)
-
 2. 单击工具栏中的“设置”按钮。AXDL 会将固件释放到本地临时目录并自动配置分区；确认配置无误后单击“OK”。
-
+   
    ![AXDL 固件分区设置](../_static/04_hardware/stereo_28.jpg)
-
 3. 使用数据线将开发板的 J15 USB 2.0 Micro-B 接口连接到电脑，并为开发板上电。
-
+   
    ![AX650 DEMO Board 烧录接口](../_static/04_hardware/stereo_35.jpg)
-
 4. 单击 AXDL 工具栏中的“开始”按钮，使工具进入等待下载状态。
-5. 同时按住开发板的下载键（DOWNLOAD）和复位键（RSTN），随后先松开复位键；等待 AXDL 进入下载流程后，再松开下载键。
-
+5. 先按下BootRom不松再按下Soc RST按键再松开，AXDL 会进入下载流程。
+   
    ![AX650 DEMO Board 下载键和复位键](../_static/04_hardware/stereo_36.jpg)
-
+   
    ![AXDL 正在下载 FDL](../_static/04_hardware/stereo_30.jpg)
-
 6. 等待烧录进度完成。AXDL 显示“Passed”表示固件烧录成功；随后重新启动开发板并检查系统版本和功能。
-
+   
    ![AXDL 烧录成功](../_static/04_hardware/stereo_31.jpg)
 
 ### 单独烧录 Kernel
@@ -78,13 +74,12 @@ AX650N DEMO板集成了AX650N基本所有的功能模块，扩展板提供了sen
 
 1. 在 AXDL 中加载与当前系统匹配的 AXP 固件，打开分区设置页面。
 2. 定位 `KERNEL` 分区，将其文件替换为新编译的 `boot_signed.bin`。
-
+   
    ![替换 KERNEL 分区文件](../_static/04_hardware/ax650_kernel_replace.png)
-
 3. 只勾选 `KERNEL` 分区，其中 `INIT` 和 `FDL` 为必下项，在确认其他分区未被选中。
-
+   
    ![选择 KERNEL 分区](../_static/04_hardware/ax650_kernel_select.png)
-
 4. 按照完整烧录时相同的连接和按键流程进入下载模式，完成局部烧录。其他分区也可采用相同方法单独替换，但必须确保分区文件与当前固件版本兼容。
-
+   
    ![单独烧录 KERNEL 分区](../_static/04_hardware/ax650_kernel_flash.png)
+

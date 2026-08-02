@@ -107,22 +107,17 @@ gcc version 9.2.1 20191025 (GNU Toolchain for the A-profile Architecture 9.2-201
 - [社区版本](https://modelscope.cn/models/AXERA-TECH/AX650-Community-Hub/tree/master/sdk/edge-computing-AX650_SDK_V3.10.2/04.%20RiscvBuildToolChain/RISC-V_ToolChain)
 - 商用版本请联系对接的FAE获取
 
-在root用户下创建安装路径：
+在root用户下解压工具链到对应路径：
 
 ````bash
-mkdir /usr/local/riscv-toolchain
+tar -vxf riscv64-elf-gnu-amd64.tar.gz -C /usr/local/
 ````
 
-解压工具链到对应路径：
-
-````bash
-tar -vxf riscv64-elf-gnu-amd64.tar.gz -C /usr/local/riscv-toolchain
-````
 
 添加环境变量：
 
 ````bash
-echo "export PATH=\"/usr/local/riscv-toolchain/riscv64-elf-gnu-amd64/bin:\$PATH\"" >> /etc/profile
+echo "export PATH=\"/usr/local/riscv64-elf-gnu-amd64/bin:\$PATH\"" >> /etc/profile
 source /etc/profile
 ````
 
@@ -346,7 +341,6 @@ make p=AX650_emmc clean all install axp
 | AX8850N / AX8910  主控开发板      | `cat /proc/ax_proc/version` | 已验证            |
 | AX8850 / AX8850N 算力卡           | `axcl-smi`                  | 已验证            |
 
-
 AX8850 / AX8850N 主控开发板示例：
 
 ```bash
@@ -381,7 +375,6 @@ axera@raspberrypi:~ $ axcl-smi
 |================================================================================================|
 axera@raspberrypi:~ $
 ```
-
 
 ### CMM 说明
 
@@ -728,6 +721,4 @@ PyAXEngine 是 NPU Python API，接口风格兼容 ONNXRuntime Python API，便�
 #### axcl-samples
 
 axcl-samples 实现了常见的 **深度学习开源算法** 在算力卡上运行的示例代码，方便社区开发者进行快速评估和适配。源码仓库见[axcl-samples](https://github.com/AXERA-TECH/axcl-samples)。
-
-
 
