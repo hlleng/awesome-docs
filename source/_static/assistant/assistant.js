@@ -22,20 +22,28 @@
     });
   }
 
-  function storageValue(key) {
+  function storageValue(storage, key) {
     try {
-      return window.localStorage.getItem(key);
+      return storage.getItem(key);
     } catch (error) {
-      console.warn("Docs assistant local storage is unavailable.", error);
+      console.warn("Docs assistant browser storage is unavailable.", error);
       return null;
     }
   }
 
-  function setStorageValue(key, value) {
+  function setStorageValue(storage, key, value) {
     try {
-      window.localStorage.setItem(key, value);
+      storage.setItem(key, value);
     } catch (error) {
-      console.warn("Docs assistant local storage is unavailable.", error);
+      console.warn("Docs assistant browser storage is unavailable.", error);
+    }
+  }
+
+  function removeStorageValue(storage, key) {
+    try {
+      storage.removeItem(key);
+    } catch (error) {
+      console.warn("Docs assistant browser storage is unavailable.", error);
     }
   }
 
@@ -49,16 +57,22 @@
   })();
   const clientStorageKey = `axera-docs-assistant-client:${storageNamespace}`;
   const conversationStorageKey = `axera-docs-assistant-conversation:${storageNamespace}`;
-  const clientId = storageValue(clientStorageKey) || randomId();
-  let conversationId = storageValue(conversationStorageKey) || randomId();
-  setStorageValue(clientStorageKey, clientId);
-  setStorageValue(conversationStorageKey, conversationId);
+  const clientId = storageValue(window.localStorage, clientStorageKey) || randomId();
+  let conversationId = storageValue(window.sessionStorage, conversationStorageKey);
+  // The previous implementation kept this key in localStorage. Drop that stale
+  // browser-only pointer when switching to tab-scoped conversations.
+  removeStorageValue(window.localStorage, conversationStorageKey);
+  setStorageValue(window.localStorage, clientStorageKey, clientId);
+  if (conversationId) {
+    setStorageValue(window.sessionStorage, conversationStorageKey, conversationId);
+  }
 
   const copy = isEnglish
     ? {
         assistant: "Docs assistant",
         welcome: "Hello. What can I help you find?",
         placeholder: "Ask about AXERA documentation...",
+        newSession: "New chat",
         send: "Send",
         close: "Close",
         sources: "Sources",
@@ -71,6 +85,7 @@
         assistant: "智能助手",
         welcome: "你好，有什么可以帮你？",
         placeholder: "询问 AXERA 文档...",
+        newSession: "新会话",
         send: "发送",
         close: "关闭",
         sources: "参考来源",
@@ -125,12 +140,17 @@
     heading.append(icon("comments"), element("h2", "docs-ai-title", copy.assistant));
     heading.querySelector("h2").id = "docs-ai-title";
     const mode = element("span", "docs-ai-mode", copy.retrieval);
+    const newSession = element("button", "docs-ai-icon-button docs-ai-new-session");
+    newSession.type = "button";
+    newSession.title = copy.newSession;
+    newSession.setAttribute("aria-label", copy.newSession);
+    newSession.append(icon("plus"), element("span", "docs-ai-new-session__label", copy.newSession));
     const close = element("button", "docs-ai-icon-button");
     close.type = "button";
     close.title = copy.close;
     close.setAttribute("aria-label", copy.close);
     close.append(icon("xmark"));
-    header.append(heading, mode, close);
+    header.append(heading, mode, newSession, close);
 
     const log = element("div", "docs-ai-log");
     log.setAttribute("role", "log");
@@ -155,6 +175,7 @@
 
     let lastFocused = null;
     let pending = false;
+    let sessionGeneration = 0;
 
     function scrollToLatest() {
       log.scrollTop = log.scrollHeight;
@@ -200,6 +221,9 @@
     appendMessage("assistant", copy.welcome);
 
     function conversationUrl() {
+      if (!conversationId) {
+        return null;
+      }
       const parsed = new URL(apiUrl, window.location.href);
       parsed.pathname = `${parsed.pathname.replace(/\/$/, "")}/conversations/${encodeURIComponent(conversationId)}`;
       parsed.search = "";
@@ -209,13 +233,18 @@
     function persistConversationId(value) {
       if (value && value !== conversationId) {
         conversationId = value;
-        setStorageValue(conversationStorageKey, conversationId);
+        setStorageValue(window.sessionStorage, conversationStorageKey, conversationId);
       }
     }
 
     async function restoreConversation() {
+      const restoreGeneration = sessionGeneration;
+      const url = conversationUrl();
+      if (!url) {
+        return;
+      }
       try {
-        const response = await fetch(conversationUrl(), {
+        const response = await fetch(url, {
           headers: { "X-Docs-Assistant-Client": clientId },
         });
         if (response.status === 404) {
@@ -225,7 +254,11 @@
         if (!response.ok) {
           throw new Error(payload.detail || payload.error || `HTTP ${response.status}`);
         }
-        if (Array.isArray(payload.messages) && payload.messages.length > 0) {
+        if (
+          restoreGeneration === sessionGeneration &&
+          Array.isArray(payload.messages) &&
+          payload.messages.length > 0
+        ) {
           log.replaceChildren();
           payload.messages.forEach((message) => {
             if (message.role === "user" || message.role === "assistant") {
@@ -239,6 +272,19 @@
     }
 
     restoreConversation();
+
+    function startNewSession() {
+      if (pending) {
+        return;
+      }
+      sessionGeneration += 1;
+      conversationId = null;
+      removeStorageValue(window.sessionStorage, conversationStorageKey);
+      log.replaceChildren();
+      mode.textContent = copy.retrieval;
+      appendMessage("assistant", copy.welcome);
+      input.focus();
+    }
 
     function openDrawer() {
       lastFocused = document.activeElement;
@@ -262,6 +308,7 @@
     }
 
     launcher.addEventListener("click", openDrawer);
+    newSession.addEventListener("click", startNewSession);
     close.addEventListener("click", closeDrawer);
     overlay.addEventListener("click", (event) => {
       if (event.target === overlay) {
@@ -291,6 +338,7 @@
       input.value = "";
       input.disabled = true;
       send.disabled = true;
+      newSession.disabled = true;
       pending = true;
       const loading = appendMessage("assistant", copy.waiting, [], "is-loading");
 
@@ -326,6 +374,7 @@
         pending = false;
         input.disabled = false;
         send.disabled = false;
+        newSession.disabled = false;
         input.focus();
       }
     });

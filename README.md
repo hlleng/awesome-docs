@@ -102,7 +102,7 @@ make serve DOCS_ASSISTANT_PUBLIC_HOST=10.0.0.10
 python3 -m pip install -r requirements.txt
 ```
 
-`make serve` 使用 Uvicorn 单 worker 启动 API，并将会话数据库写入本地被忽略的 `.docs-assistant/docs-assistant.sqlite3`。MCP/LLM 地址和凭据可写入被 Git 忽略的 `tools/docs_assistant/local_config.py`，或通过 `DOCS_ASSISTANT_*` 环境变量注入；环境变量优先级更高。
+`make serve` 使用 Uvicorn 单 worker 启动 API，并将会话数据库写入本地被忽略的 `.docs-assistant/docs-assistant.sqlite3`。助手标题栏的“新会话”会切换到新的标签页级会话；关闭抽屉不会结束会话，刷新当前标签页会恢复历史。`client_id` 保存在 `localStorage`，`conversation_id` 保存在 `sessionStorage`，因此新开标签页通常会创建新会话。MCP/LLM 地址和凭据可写入被 Git 忽略的 `tools/docs_assistant/local_config.py`，或通过 `DOCS_ASSISTANT_*` 环境变量注入；环境变量优先级更高。
 如果浏览器运行在另一台机器上，还需要确保该机器可以访问助手端口 `8300`；只开放文档端口 `8200` 不足以完成提问。
 
 如果 MCP 需要绕过本地代理：
@@ -129,6 +129,8 @@ DOCS_ASSISTANT_API_URL=https://chatbot.hlleng.xx.kg/api/docs-assistant
 ```
 
 API 服务器设置 `DOCS_ASSISTANT_ALLOWED_ORIGINS=https://awesome-edge-docs.readthedocs.io`，并配置现有 MCP、Collection 和 OpenAI-compatible LLM。会话历史保存在 `DOCS_ASSISTANT_DB_PATH` 指定的 SQLite 文件中，默认保留 30 天、最近 24 条消息；生产容器应将该文件放到可写的持久化卷，例如 `/data/docs-assistant.sqlite3`。该服务只负责编排检索与生成，不需要重新建立知识库。
+
+点击助手中的“新会话”只会切换当前标签页使用的会话，不会立即删除旧记录；旧会话由 TTL 自动清理。如需立即清理，调用对应会话的 `DELETE /api/docs-assistant/conversations/{conversation_id}` 接口。
 
 可以使用仓库提供的镜像构建文件部署单个 API 容器：
 
