@@ -10,6 +10,50 @@
   const apiUrl = script?.dataset.apiUrl || "/api/docs-assistant";
   const language = script?.dataset.language || document.documentElement.lang || "zh_CN";
   const isEnglish = language.toLowerCase().startsWith("en");
+
+  function randomId() {
+    if (window.crypto?.randomUUID) {
+      return window.crypto.randomUUID();
+    }
+    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (char) => {
+      const random = Math.random() * 16;
+      const value = char === "x" ? random : (random & 0x3) | 0x8;
+      return Math.floor(value).toString(16);
+    });
+  }
+
+  function storageValue(key) {
+    try {
+      return window.localStorage.getItem(key);
+    } catch (error) {
+      console.warn("Docs assistant local storage is unavailable.", error);
+      return null;
+    }
+  }
+
+  function setStorageValue(key, value) {
+    try {
+      window.localStorage.setItem(key, value);
+    } catch (error) {
+      console.warn("Docs assistant local storage is unavailable.", error);
+    }
+  }
+
+  const storageNamespace = (() => {
+    try {
+      const parsed = new URL(apiUrl, window.location.href);
+      return `${parsed.origin}${parsed.pathname}`;
+    } catch (error) {
+      return apiUrl;
+    }
+  })();
+  const clientStorageKey = `axera-docs-assistant-client:${storageNamespace}`;
+  const conversationStorageKey = `axera-docs-assistant-conversation:${storageNamespace}`;
+  const clientId = storageValue(clientStorageKey) || randomId();
+  let conversationId = storageValue(conversationStorageKey) || randomId();
+  setStorageValue(clientStorageKey, clientId);
+  setStorageValue(conversationStorageKey, conversationId);
+
   const copy = isEnglish
     ? {
         assistant: "Docs assistant",
@@ -109,7 +153,6 @@
     overlay.append(drawer);
     document.body.append(launcher, overlay);
 
-    const history = [];
     let lastFocused = null;
     let pending = false;
 
@@ -155,6 +198,47 @@
     }
 
     appendMessage("assistant", copy.welcome);
+
+    function conversationUrl() {
+      const parsed = new URL(apiUrl, window.location.href);
+      parsed.pathname = `${parsed.pathname.replace(/\/$/, "")}/conversations/${encodeURIComponent(conversationId)}`;
+      parsed.search = "";
+      return parsed.toString();
+    }
+
+    function persistConversationId(value) {
+      if (value && value !== conversationId) {
+        conversationId = value;
+        setStorageValue(conversationStorageKey, conversationId);
+      }
+    }
+
+    async function restoreConversation() {
+      try {
+        const response = await fetch(conversationUrl(), {
+          headers: { "X-Docs-Assistant-Client": clientId },
+        });
+        if (response.status === 404) {
+          return;
+        }
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.detail || payload.error || `HTTP ${response.status}`);
+        }
+        if (Array.isArray(payload.messages) && payload.messages.length > 0) {
+          log.replaceChildren();
+          payload.messages.forEach((message) => {
+            if (message.role === "user" || message.role === "assistant") {
+              appendMessage(message.role, String(message.content || ""), message.sources);
+            }
+          });
+        }
+      } catch (error) {
+        console.warn("Docs assistant conversation restore failed.", error);
+      }
+    }
+
+    restoreConversation();
 
     function openDrawer() {
       lastFocused = document.activeElement;
@@ -203,8 +287,6 @@
         return;
       }
 
-      const priorHistory = history.slice(-6);
-      history.push({ role: "user", content: message });
       appendMessage("user", message);
       input.value = "";
       input.disabled = true;
@@ -218,7 +300,8 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             message,
-            history: priorHistory,
+            conversation_id: conversationId,
+            client_id: clientId,
             page: {
               title: document.querySelector("main h1, article h1")?.textContent?.trim() || document.title,
               url: window.location.href,
@@ -230,10 +313,10 @@
         if (!response.ok) {
           throw new Error(payload.error || `HTTP ${response.status}`);
         }
+        persistConversationId(payload.conversation_id);
         loading.remove();
         const answer = String(payload.answer || copy.failed);
         appendMessage("assistant", answer, payload.sources);
-        history.push({ role: "assistant", content: answer });
         mode.textContent = payload.mode === "llm" ? copy.llm : copy.retrieval;
       } catch (error) {
         loading.remove();

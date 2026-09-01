@@ -1,0 +1,21 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+COPY tools/docs_assistant/requirements.txt /tmp/docs-assistant-requirements.txt
+RUN pip install --no-cache-dir -r /tmp/docs-assistant-requirements.txt
+
+# Copy only runtime files so an ignored local_config.py can never enter the image.
+COPY tools/__init__.py /app/tools/__init__.py
+COPY tools/docs_assistant/__init__.py /app/tools/docs_assistant/__init__.py
+COPY tools/docs_assistant/memory.py /app/tools/docs_assistant/memory.py
+COPY tools/docs_assistant/server.py /app/tools/docs_assistant/server.py
+
+ENV DOCS_ASSISTANT_HOST=0.0.0.0 \
+    DOCS_ASSISTANT_PORT=8300 \
+    DOCS_ASSISTANT_DB_PATH=/data/docs-assistant.sqlite3 \
+    PYTHONUNBUFFERED=1
+
+EXPOSE 8300
+
+CMD ["python3", "-m", "tools.docs_assistant.server"]

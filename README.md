@@ -96,7 +96,13 @@ make serve
 make serve DOCS_ASSISTANT_PUBLIC_HOST=10.0.0.10
 ```
 
-MCP/LLM 地址和凭据可写入被 Git 忽略的 `tools/docs_assistant/local_config.py`，或通过 `DOCS_ASSISTANT_*` 环境变量注入；环境变量优先级更高。
+首次使用前安装 docs-assistant 运行依赖（`requirements.txt` 已通过 `-r` 包含它们）：
+
+```bash
+python3 -m pip install -r requirements.txt
+```
+
+`make serve` 使用 Uvicorn 单 worker 启动 API，并将会话数据库写入本地被忽略的 `.docs-assistant/docs-assistant.sqlite3`。MCP/LLM 地址和凭据可写入被 Git 忽略的 `tools/docs_assistant/local_config.py`，或通过 `DOCS_ASSISTANT_*` 环境变量注入；环境变量优先级更高。
 如果浏览器运行在另一台机器上，还需要确保该机器可以访问助手端口 `8300`；只开放文档端口 `8200` 不足以完成提问。
 
 如果 MCP 需要绕过本地代理：
@@ -122,7 +128,15 @@ RTD 项目环境变量配置为：
 DOCS_ASSISTANT_API_URL=https://chatbot.hlleng.xx.kg/api/docs-assistant
 ```
 
-API 服务器设置 `DOCS_ASSISTANT_ALLOWED_ORIGINS=https://awesome-edge-docs.readthedocs.io`，并配置现有 MCP、Collection 和 OpenAI-compatible LLM。该服务只负责编排检索与生成，不需要重新建立知识库。
+API 服务器设置 `DOCS_ASSISTANT_ALLOWED_ORIGINS=https://awesome-edge-docs.readthedocs.io`，并配置现有 MCP、Collection 和 OpenAI-compatible LLM。会话历史保存在 `DOCS_ASSISTANT_DB_PATH` 指定的 SQLite 文件中，默认保留 30 天、最近 24 条消息；生产容器应将该文件放到可写的持久化卷，例如 `/data/docs-assistant.sqlite3`。该服务只负责编排检索与生成，不需要重新建立知识库。
+
+可以使用仓库提供的镜像构建文件部署单个 API 容器：
+
+```bash
+docker build -f Dockerfile.docs-assistant -t axera-docs-assistant:latest .
+```
+
+运行时将 `/data` 挂载为可写目录，并把 `DOCS_ASSISTANT_MCP_*`、`DOCS_ASSISTANT_LLM_*` 和 `DOCS_ASSISTANT_ALLOWED_ORIGINS` 作为环境变量或 Secret 注入。默认 Uvicorn 配置为 `--workers 1`，适合 SQLite 单实例部署；扩展到多实例时应改用共享 PostgreSQL/Redis 存储。
 
 ## 3. 参考设计
 

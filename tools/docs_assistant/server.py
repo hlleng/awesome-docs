@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Minimal MCP-backed API for the Sphinx documentation assistant."""
+"""FastAPI service for the Sphinx documentation assistant."""
 
 from __future__ import annotations
 
@@ -9,11 +9,21 @@ import os
 import re
 import uuid
 from dataclasses import dataclass
-from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import Request as UrlRequest, urlopen
+
+import uvicorn
+from fastapi import FastAPI, Header, HTTPException, Request as FastAPIRequest
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+
+from .memory import (
+    ConversationAccessError,
+    ConversationNotFoundError,
+    ConversationStore,
+)
 
 LOGGER = logging.getLogger("docs-assistant")
 
@@ -55,6 +65,17 @@ def _csv_env(name: str, default: str) -> tuple[str, ...]:
     return tuple(item.strip() for item in value.split(",") if item.strip())
 
 
+def _normalize_uuid(value: Any, field: str, *, create: bool = False) -> str:
+    if value is None or not str(value).strip():
+        if create:
+            return str(uuid.uuid4())
+        raise ValueError(f"{field} is required")
+    try:
+        return str(uuid.UUID(str(value)))
+    except (AttributeError, TypeError, ValueError) as error:
+        raise ValueError(f"{field} must be a UUID") from error
+
+
 @dataclass(frozen=True)
 class Config:
     host: str
@@ -73,7 +94,11 @@ class Config:
     reranker_top_k: int
     score_threshold: float
     max_context_chars: int
+    context_messages: int
     max_body_bytes: int
+    db_path: str
+    memory_ttl_seconds: int
+    memory_max_messages: int
 
     @property
     def llm_configured(self) -> bool:
@@ -116,7 +141,15 @@ class Config:
             reranker_top_k=_env_int("DOCS_ASSISTANT_RERANKER_TOP_K", 5),
             score_threshold=_env_float("DOCS_ASSISTANT_SCORE_THRESHOLD", 0.05),
             max_context_chars=_env_int("DOCS_ASSISTANT_MAX_CONTEXT_CHARS", 18_000),
+            context_messages=_env_int("DOCS_ASSISTANT_CONTEXT_MESSAGES", 12),
             max_body_bytes=_env_int("DOCS_ASSISTANT_MAX_BODY_BYTES", 64 * 1024),
+            db_path=os.environ.get(
+                "DOCS_ASSISTANT_DB_PATH", ".docs-assistant/docs-assistant.sqlite3"
+            ).strip(),
+            memory_ttl_seconds=_env_int(
+                "DOCS_ASSISTANT_MEMORY_TTL_SECONDS", 30 * 24 * 60 * 60
+            ),
+            memory_max_messages=_env_int("DOCS_ASSISTANT_MEMORY_MAX_MESSAGES", 24),
         )
 
 
@@ -125,7 +158,9 @@ def _decode_http_payload(body: str, content_type: str) -> Any:
         events = []
         for line in body.splitlines():
             if line.startswith("data:"):
-                events.append(json.loads(line[5:].strip()))
+                data = line[5:].strip()
+                if data and data != "[DONE]":
+                    events.append(json.loads(data))
         if not events:
             raise UpstreamError("upstream returned an empty event stream")
         return events[-1]
@@ -139,7 +174,7 @@ def _post_json(
     headers: dict[str, str],
     timeout: int,
 ) -> Any:
-    request = Request(
+    request = UrlRequest(
         url,
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
         headers=headers,
@@ -163,18 +198,21 @@ def _mcp_tool_result(payload: Any) -> dict[str, Any]:
         raise UpstreamError(f"MCP error: {payload['error']}")
 
     result = payload.get("result", {})
+    if not isinstance(result, dict):
+        raise UpstreamError("MCP returned an invalid result")
     structured = result.get("structuredContent", {})
-    if isinstance(structured.get("result"), dict):
+    if isinstance(structured, dict) and isinstance(structured.get("result"), dict):
         return structured["result"]
 
     for item in result.get("content", []):
-        if item.get("type") == "text":
-            try:
-                parsed = json.loads(item.get("text", ""))
-            except json.JSONDecodeError:
-                continue
-            if isinstance(parsed, dict):
-                return parsed
+        if not isinstance(item, dict) or item.get("type") != "text":
+            continue
+        try:
+            parsed = json.loads(item.get("text", ""))
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
     raise UpstreamError("MCP response did not contain structured search results")
 
 
@@ -249,14 +287,19 @@ def retrieval_preview(sources: list[dict[str, Any]]) -> str:
 
 
 class AssistantService:
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, store: ConversationStore | None = None):
         self.config = config
+        self.store = store or ConversationStore(
+            config.db_path,
+            ttl_seconds=config.memory_ttl_seconds,
+            max_messages=config.memory_max_messages,
+        )
 
     def search(self, query: str) -> list[dict[str, Any]]:
         headers = {
             "Accept": "application/json, text/event-stream",
             "Content-Type": "application/json",
-            "User-Agent": "AXERA-Docs-Assistant/0.1",
+            "User-Agent": "AXERA-Docs-Assistant/0.2",
         }
         if self.config.mcp_auth_value:
             headers[self.config.mcp_auth_header] = self.config.mcp_auth_value
@@ -280,13 +323,16 @@ class AssistantService:
             timeout=self.config.mcp_timeout_seconds,
         )
         result = _mcp_tool_result(response)
-        return extract_sources(result.get("results", []), self.config.score_threshold)
+        raw_results = result.get("results", [])
+        if not isinstance(raw_results, list):
+            raise UpstreamError("MCP returned invalid search results")
+        return extract_sources(raw_results, self.config.score_threshold)
 
     def generate(
         self,
         question: str,
         sources: list[dict[str, Any]],
-        history: list[dict[str, str]],
+        history: list[dict[str, Any]],
         page: dict[str, str],
     ) -> str:
         if not self.config.llm_configured:
@@ -306,10 +352,10 @@ class AssistantService:
                 ),
             }
         ]
-        for item in history[-6:]:
+        for item in history[-self.config.context_messages :]:
             if item.get("role") in {"user", "assistant"} and item.get("content"):
                 messages.append(
-                    {"role": item["role"], "content": item["content"][:2_000]}
+                    {"role": item["role"], "content": str(item["content"])[:2_000]}
                 )
         page_context = "\n".join(
             part
@@ -347,109 +393,182 @@ class AssistantService:
             raise ValueError("message is required")
         if len(question) > 4_000:
             raise ValueError("message is too long")
-        history = payload.get("history") if isinstance(payload.get("history"), list) else []
+
+        conversation_id = _normalize_uuid(
+            payload.get("conversation_id"), "conversation_id", create=True
+        )
+        client_id = _normalize_uuid(payload.get("client_id"), "client_id", create=True)
         page = payload.get("page") if isinstance(payload.get("page"), dict) else {}
-        sources = self.search(question)
-        answer = self.generate(question, sources, history, page)
+
+        with self.store.conversation_lock(conversation_id):
+            self.store.ensure(conversation_id, client_id)
+            history = self.store.load(conversation_id, client_id)
+            sources = self.search(question)
+            answer = self.generate(question, sources, history, page)
+            self.store.append(
+                conversation_id,
+                client_id,
+                role="user",
+                content=question,
+            )
+            self.store.append(
+                conversation_id,
+                client_id,
+                role="assistant",
+                content=answer,
+                sources=sources,
+            )
+
         return {
             "answer": answer,
             "sources": sources,
             "mode": "llm" if self.config.llm_configured else "retrieval",
+            "conversation_id": conversation_id,
         }
 
+    def get_history(self, conversation_id: str, client_id: str) -> list[dict[str, Any]]:
+        return self.store.load(conversation_id, client_id, create=False)
 
-class AssistantHandler(BaseHTTPRequestHandler):
-    server_version = "AXERADocsAssistant/0.1"
-    config: Config
-    service: AssistantService
+    def delete_history(self, conversation_id: str, client_id: str) -> None:
+        self.store.delete(conversation_id, client_id)
 
-    def _origin(self) -> str:
-        return self.headers.get("Origin", "")
 
-    def _origin_allowed(self) -> bool:
-        origin = self._origin()
-        return not origin or "*" in self.config.allowed_origins or origin in self.config.allowed_origins
+class AskRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=4_000)
+    conversation_id: str | None = None
+    client_id: str | None = None
+    page: dict[str, str] = Field(default_factory=dict)
 
-    def _send_json(self, status: int, payload: dict[str, Any]) -> None:
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Vary", "Origin")
-        if self._origin() and self._origin_allowed():
-            self.send_header("Access-Control-Allow-Origin", self._origin())
-        self.end_headers()
-        self.wfile.write(body)
 
-    def do_OPTIONS(self) -> None:  # noqa: N802
-        if not self._origin_allowed():
-            self._send_json(HTTPStatus.FORBIDDEN, {"error": "origin is not allowed"})
-            return
-        self.send_response(HTTPStatus.NO_CONTENT)
-        self.send_header("Access-Control-Allow-Origin", self._origin())
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.send_header("Access-Control-Max-Age", "600")
-        self.end_headers()
+def _model_dict(model: BaseModel) -> dict[str, Any]:
+    dump = getattr(model, "model_dump", None)
+    return dump() if dump else model.dict()
 
-    def do_GET(self) -> None:  # noqa: N802
-        if self.path != "/health":
-            self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
-            return
-        self._send_json(
-            HTTPStatus.OK,
-            {
-                "status": "ok",
-                "mcp_configured": bool(self.config.mcp_url),
-                "llm_configured": self.config.llm_configured,
-            },
-        )
 
-    def do_POST(self) -> None:  # noqa: N802
-        if self.path != "/api/docs-assistant":
-            self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
-            return
-        if not self._origin_allowed():
-            self._send_json(HTTPStatus.FORBIDDEN, {"error": "origin is not allowed"})
-            return
+def create_app(
+    config: Config | None = None,
+    *,
+    store: ConversationStore | None = None,
+    service: AssistantService | None = None,
+) -> FastAPI:
+    config = config or Config.from_env()
+    store = store or ConversationStore(
+        config.db_path,
+        ttl_seconds=config.memory_ttl_seconds,
+        max_messages=config.memory_max_messages,
+    )
+    service = service or AssistantService(config, store)
+
+    api = FastAPI(
+        title="AXERA Docs Assistant",
+        version="0.2.0",
+        openapi_url=None,
+        docs_url=None,
+        redoc_url=None,
+    )
+    api.state.docs_assistant_config = config
+    api.state.docs_assistant_store = store
+    api.state.docs_assistant_service = service
+    api.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(config.allowed_origins),
+        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+        allow_headers=["Content-Type", "X-Docs-Assistant-Client"],
+        allow_credentials=False,
+    )
+
+    @api.middleware("http")
+    async def enforce_body_limit(request: FastAPIRequest, call_next: Any) -> Any:
+        content_length = request.headers.get("content-length")
+        if content_length:
+            try:
+                request_size = int(content_length)
+            except ValueError:
+                return JSONResponse(status_code=400, content={"error": "invalid content length"})
+            if request_size > config.max_body_bytes:
+                return JSONResponse(status_code=413, content={"error": "request body is too large"})
+        return await call_next(request)
+
+    @api.get("/health")
+    def health() -> dict[str, Any]:
+        return {
+            "status": "ok",
+            "mcp_configured": bool(config.mcp_url),
+            "llm_configured": config.llm_configured,
+            "memory": "sqlite",
+        }
+
+    @api.get("/api/docs-assistant/conversations/{conversation_id}")
+    def get_conversation(
+        conversation_id: str,
+        x_docs_assistant_client: str | None = Header(
+            default=None, alias="X-Docs-Assistant-Client"
+        ),
+    ) -> dict[str, Any]:
         try:
-            length = int(self.headers.get("Content-Length", "0"))
-            if length <= 0 or length > self.config.max_body_bytes:
-                raise ValueError("invalid request size")
-            payload = json.loads(self.rfile.read(length).decode("utf-8"))
-            if not isinstance(payload, dict):
-                raise ValueError("request body must be an object")
-            response = self.service.ask(payload)
-            self._send_json(HTTPStatus.OK, response)
-        except (ValueError, json.JSONDecodeError) as error:
-            self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            normalized_conversation = _normalize_uuid(conversation_id, "conversation_id")
+            normalized_client = _normalize_uuid(
+                x_docs_assistant_client, "X-Docs-Assistant-Client"
+            )
+            messages = service.get_history(normalized_conversation, normalized_client)
+            return {"conversation_id": normalized_conversation, "messages": messages}
+        except ConversationAccessError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+        except ConversationNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    @api.delete("/api/docs-assistant/conversations/{conversation_id}")
+    def delete_conversation(
+        conversation_id: str,
+        x_docs_assistant_client: str | None = Header(
+            default=None, alias="X-Docs-Assistant-Client"
+        ),
+    ) -> dict[str, str]:
+        try:
+            normalized_conversation = _normalize_uuid(conversation_id, "conversation_id")
+            normalized_client = _normalize_uuid(
+                x_docs_assistant_client, "X-Docs-Assistant-Client"
+            )
+            service.delete_history(normalized_conversation, normalized_client)
+            return {"status": "deleted"}
+        except ConversationAccessError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+        except ConversationNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    @api.post("/api/docs-assistant")
+    def ask(payload: AskRequest) -> Any:
+        try:
+            return service.ask(_model_dict(payload))
+        except ConversationAccessError as error:
+            return JSONResponse(status_code=403, content={"error": str(error)})
+        except (ValueError, ConversationNotFoundError) as error:
+            return JSONResponse(status_code=400, content={"error": str(error)})
         except UpstreamError as error:
             LOGGER.warning("upstream request failed: %s", error)
-            self._send_json(HTTPStatus.BAD_GATEWAY, {"error": str(error)})
+            return JSONResponse(status_code=502, content={"error": str(error)})
         except Exception:
             LOGGER.exception("unexpected request failure")
-            self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "internal error"})
+            return JSONResponse(status_code=500, content={"error": "internal error"})
 
-    def log_message(self, format: str, *args: Any) -> None:
-        LOGGER.info("%s - %s", self.client_address[0], format % args)
+    return api
+
+
+app = create_app()
 
 
 def run(config: Config | None = None) -> None:
     config = config or Config.from_env()
     if not config.mcp_url:
         raise SystemExit("DOCS_ASSISTANT_MCP_URL is required")
-    AssistantHandler.config = config
-    AssistantHandler.service = AssistantService(config)
-    server = ThreadingHTTPServer((config.host, config.port), AssistantHandler)
+    selected_app = create_app(config)
     mode = "LLM" if config.llm_configured else "retrieval preview"
-    LOGGER.info("listening on http://%s:%s (%s)", config.host, config.port, mode)
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        server.server_close()
+    LOGGER.info("listening on http://%s:%s (%s, sqlite)", config.host, config.port, mode)
+    uvicorn.run(selected_app, host=config.host, port=config.port, workers=1)
 
 
 if __name__ == "__main__":

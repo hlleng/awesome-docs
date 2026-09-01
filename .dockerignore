@@ -1,0 +1,8 @@
+.git/
+.docs-assistant/
+build/
+source/
+site-*/
+*.pyc
+__pycache__/
+tools/docs_assistant/local_config.py
