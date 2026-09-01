@@ -62,10 +62,72 @@ make serve
 
 默认访问地址：`http://localhost:8200/`。
 
+### 2.5 文档智能助手
+
+助手采用独立的 Python API，页面端只加载仓库中的 `assistant/assistant.js`，请求链路如下：
+
+```text
+Sphinx 静态页面 → docs-assistant API → RAG_Retrieval MCP → LLM
+```
+
+现有 MCP 是唯一的检索源，服务不会再维护第二套知识库。当前生产 API 地址为：
+
+```text
+https://chatbot.hlleng.xx.kg/api/docs-assistant
+```
+
+Sphinx 默认使用该地址；构建时可通过 `DOCS_ASSISTANT_API_URL` 覆盖，例如：
+
+```bash
+DOCS_ASSISTANT_API_URL="https://your-assistant.example.com/api/docs-assistant" make html
+```
+
+Read the Docs 项目如需覆盖默认值，在 `Admin → Environment Variables` 中配置同名变量。MCP/LLM 地址和密钥只放在 docs-assistant 服务器，不要写入静态页面。
+
+本地开发使用当前 Python MCP/LLM 适配服务：
+
+```bash
+make serve
+```
+
+`make serve` 会同时启动文档服务器 `8200` 和助手 API `8300`，助手默认监听局域网接口，并在 API 健康检查通过后开放预览。因此可从本机或局域网浏览器访问 `http://<本机IP>:8200/`。如果本机有多个网卡，可显式指定页面使用的 API 主机：
+
+```bash
+make serve DOCS_ASSISTANT_PUBLIC_HOST=10.0.0.10
+```
+
+MCP/LLM 地址和凭据可写入被 Git 忽略的 `tools/docs_assistant/local_config.py`，或通过 `DOCS_ASSISTANT_*` 环境变量注入；环境变量优先级更高。
+如果浏览器运行在另一台机器上，还需要确保该机器可以访问助手端口 `8300`；只开放文档端口 `8200` 不足以完成提问。
+
+如果 MCP 需要绕过本地代理：
+
+```bash
+export NO_PROXY="${NO_PROXY:+$NO_PROXY,}your-mcp-host.example.com"
+export no_proxy="$NO_PROXY"
+```
+
+生产 MCP 必须使用稳定 HTTPS 域名和认证，不要依赖临时 `trycloudflare.com` quick tunnel。
+
+### 2.6 部署 docs-assistant API
+
+将 `tools/docs_assistant` 部署到公网服务器，并由 Caddy/Nginx 通过 HTTPS 域名反向代理。当前验证的域名为：
+
+```text
+https://chatbot.hlleng.xx.kg
+```
+
+RTD 项目环境变量配置为：
+
+```text
+DOCS_ASSISTANT_API_URL=https://chatbot.hlleng.xx.kg/api/docs-assistant
+```
+
+API 服务器设置 `DOCS_ASSISTANT_ALLOWED_ORIGINS=https://awesome-edge-docs.readthedocs.io`，并配置现有 MCP、Collection 和 OpenAI-compatible LLM。该服务只负责编排检索与生成，不需要重新建立知识库。
+
 ## 3. 参考设计
 
 这个项目基于 Sphinx，更多信息见 https://www.sphinx-doc.org/en/master/。
 
 ## 4. 在线发布
 
-基于 [Read the Docs](https://readthedocs.org/) 平台发布在线 Web 服务。
+基于 [Read the Docs](https://readthedocs.org/) 平台发布静态文档，docs-assistant API 在独立公网服务器运行。RTD 构建阶段只运行 Sphinx，不启动 `tools.docs_assistant.server`。

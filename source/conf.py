@@ -45,6 +45,24 @@ html_theme = 'sphinx_book_theme'
 html_static_path = ['_static']
 html_title = 'AXERA Edge Computing Docs'
 
+# 所有构建环境都使用自建 docs-assistant API。RTD 只生成静态页面，API
+# 由 chatbot.hlleng.xx.kg 单独提供；本地 ``make serve`` 会覆盖为局域网可访问地址。
+docs_assistant_api_url = os.environ.get(
+    'DOCS_ASSISTANT_API_URL',
+    'https://chatbot.hlleng.xx.kg/api/docs-assistant',
+).strip()
+html_css_files = ['assistant/assistant.css']
+html_js_files = [
+    (
+        'assistant/assistant.js',
+        {
+            'defer': 'defer',
+            'data-api-url': docs_assistant_api_url,
+            'data-language': language,
+        },
+    ),
+]
+
 html_theme_options = {
     'repository_url': 'https://github.com/AXERA-TECH/awesome-docs',
     'use_repository_button': True,

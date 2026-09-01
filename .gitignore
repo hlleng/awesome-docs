@@ -6,5 +6,8 @@ build/
 .vscode/
 pre_process.log
 
+# Local docs-assistant credentials and endpoint configuration.
+tools/docs_assistant/local_config.py
+
 
 *.mo
