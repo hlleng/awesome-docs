@@ -64,13 +64,19 @@ make serve
 
 ### 2.5 文档智能助手
 
-本仓库只包含文档助手的 Sphinx 使用端。页面加载仓库中的 `assistant/assistant.js`，请求已部署的助手 API：
+本仓库只包含文档助手的 Sphinx 使用端，不包含服务端运行代码。客户端源码位于：
+
+- `source/_static/assistant/assistant.js`：请求 API、渲染消息和管理会话；
+- `source/_static/assistant/assistant.css`：助手浮窗样式；
+- `source/conf.py`：将 API 地址注入生成的 HTML。
+
+页面加载上述源码，请求独立的 [docs-assistant 服务](https://github.com/hlleng/docs-assistant)：
 
 ```text
 Sphinx 静态页面 → docs-assistant API
 ```
 
-当前生产 API 地址为：
+默认 API 地址为：
 
 ```text
 https://chatbot.hlleng.xx.kg/api/docs-assistant
@@ -82,7 +88,7 @@ Sphinx 默认使用该地址；构建时可通过 `DOCS_ASSISTANT_API_URL` 覆�
 DOCS_ASSISTANT_API_URL="https://your-assistant.example.com/api/docs-assistant" make html
 ```
 
-Read the Docs 项目如需切换助手地址，在 `Admin → Environment Variables` 中配置同名变量。MCP/LLM 地址、密钥和会话数据均由独立的 docs-assistant 服务管理，不要写入本仓库的静态资源。
+Read the Docs 项目如需切换助手地址，在 `Admin → Environment Variables` 中配置同名变量。服务端的 MCP/LLM 配置、会话数据、部署、备份和迁移均在独立仓库维护，不要写入本仓库的静态资源。
 
 助手会话行为：
 
@@ -92,6 +98,8 @@ Read the Docs 项目如需切换助手地址，在 `Admin → Environment Variab
 - 点击标题栏“新会话”：清空当前界面并开始新会话。
 
 `client_id` 保存在浏览器 `localStorage`，`conversation_id` 保存在当前标签页的 `sessionStorage`。
+
+服务端部署与数据迁移请参阅 [docs-assistant README](https://github.com/hlleng/docs-assistant)。
 
 ## 3. 参考设计
 
