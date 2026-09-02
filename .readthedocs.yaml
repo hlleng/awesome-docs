@@ -19,6 +19,12 @@ python:
   install:
     - requirements: requirements.txt
 
+# RTD 构建阶段只运行 Sphinx；页面端默认调用已部署的 docs-assistant API：
+# https://chatbot.hlleng.xx.kg/api/docs-assistant
+# 如需替换，可在 Read the Docs 项目的 Admin → Environment Variables 中配置：
+#   DOCS_ASSISTANT_API_URL=https://your-assistant.example.com/api/docs-assistant
+# MCP/LLM 地址、密钥和会话数据由独立服务管理，不要放入 RTD 或静态资源。
+
 sphinx:
   configuration: source/conf.py
   # 如需对损坏的引用更严格，可开启：
