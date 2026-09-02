@@ -1,1 +1,0 @@
-"""Sphinx documentation assistant backend."""

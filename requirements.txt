@@ -6,5 +6,3 @@ myst-parser
 sphinxcontrib-mermaid
 sphinx-intl
 linkify-it-py
-# docs-assistant runtime (used by local `make serve` and the deployment image)
--r tools/docs_assistant/requirements.txt
